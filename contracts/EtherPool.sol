@@ -95,6 +95,7 @@ contract EtherPool is MerkleTreeWithHistory, UUPSUpgradeable {
     nullifierHashes[_args.inputNullifiers[0]] = true;
     nullifierHashes[_args.inputNullifiers[1]] = true;
 
+    // internal transfers are not allowed. if _extData.extAmount == 0, it will fail at calculatePublicAmount() above.
     if (_extData.extAmount > 0) {
       require(msg.value == uint256(_extData.extAmount), "Incorrect ETH value");
       require(uint256(_extData.extAmount) <= maximumDepositAmount, "amount is larger than maximumDepositAmount");
@@ -103,8 +104,6 @@ contract EtherPool is MerkleTreeWithHistory, UUPSUpgradeable {
       require(_extData.recipient != address(0), "Can't withdraw to zero address");
       (bool success, ) = _extData.recipient.call{value: uint256(-_extData.extAmount)}("");
       require(success, "ETH transfer failed");
-    } else {
-      require(msg.value == 0, "Cannot send ETH for zero-amount tx");
     }
 
     // fees and feeRecipient are intentionally not checked at protocol level, as a tip to the relayer
