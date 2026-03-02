@@ -107,6 +107,7 @@ contract EtherPool is MerkleTreeWithHistory, UUPSUpgradeable {
       require(msg.value == 0, "Cannot send ETH for zero-amount tx");
     }
 
+    // fees and feeRecipient are intentionally not checked at protocol level, as a tip to the relayer
     if (_extData.fee > 0) {
       (bool success, ) = _extData.feeRecipient.call{value: _extData.fee}("");
       require(success, "Fee transfer failed");
