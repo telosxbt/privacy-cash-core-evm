@@ -147,5 +147,5 @@ contract MerkleTreeWithHistory is Initializable {
     else revert("Index out of bounds");
   }
 
-  uint256[50] private __gap;
+  uint256[47] private __gap;
 }
