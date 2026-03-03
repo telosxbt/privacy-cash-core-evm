@@ -12,7 +12,7 @@ const { signIn, encrypt, decrypt } = require('../src/encryption')
 const { prove } = require('../src/prover')
 const { BigNumber } = ethers
 const MERKLE_TREE_HEIGHT = 26
-const MERKLE_TREE_ZERO_VALUE = '21663839004416932945382355908790599225266501822907911457504978515578255421292'
+const MERKLE_TREE_ZERO_VALUE = '2795675251356313514992617062594790716374808130983166135938897961178374655502'
 const MAXIMUM_DEPOSIT_AMOUNT = utils.parseEther('1')
 
 function createEmptyTree() {

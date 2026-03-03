@@ -18,7 +18,7 @@ describe('MerkleTreeWithHistory', function () {
     return instance.deployed()
   }
 
-  const MERKLE_TREE_ZERO_VALUE = '21663839004416932945382355908790599225266501822907911457504978515578255421292'
+  const MERKLE_TREE_ZERO_VALUE = '2795675251356313514992617062594790716374808130983166135938897961178374655502'
 
   function getNewTree(height = MERKLE_TREE_HEIGHT) {
     return new MerkleTree(height, [], { hashFunction: poseidonHash2, zeroElement: MERKLE_TREE_ZERO_VALUE })
@@ -96,6 +96,16 @@ describe('MerkleTreeWithHistory', function () {
         const nextZero = await merkleTreeWithHistory.zeros(i + 1)
         const computedNext = poseidonHash2(currentZero, currentZero)
         expect(nextZero).to.equal(computedNext)
+      }
+    })
+
+    it('should return correct zeros for all levels 0 through 32', async () => {
+      const { merkleTreeWithHistory } = await loadFixture(fixture)
+      let current = ethers.BigNumber.from(MERKLE_TREE_ZERO_VALUE)
+      for (let i = 0; i <= 32; i++) {
+        const contractZero = await merkleTreeWithHistory.zeros(i)
+        expect(contractZero).to.equal(toFixedHex(current), `zeros(${i}) mismatch`)
+        current = poseidonHash2(current, current)
       }
     })
 
