@@ -40,6 +40,11 @@
       "address": "0x07E212E99d777d797c7B4CB5ffE3CaC5584c11Ed",
       "txHash": "0x84f1bfecf4eabbaf52b92ec2c692f10d99621d234fcca503605b6c17d1b35359",
       "kind": "uups"
+    },
+    {
+      "address": "0x51450B59ec2Bc26852415cB1047DF31772aD9cD5",
+      "txHash": "0xc55be9100243fcebdfc5be3e247afa8985e3d8bd3e79b2cef44ba3b75b586926",
+      "kind": "uups"
     }
   ],
   "impls": {
@@ -1132,6 +1137,148 @@
           "t_array(t_uint256)50_storage": {
             "label": "uint256[50]",
             "numberOfBytes": "1600"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_bytes32,t_bool)": {
+            "label": "mapping(bytes32 => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_uint256,t_bytes32)": {
+            "label": "mapping(uint256 => bytes32)",
+            "numberOfBytes": "32"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          },
+          "t_uint32": {
+            "label": "uint32",
+            "numberOfBytes": "4"
+          },
+          "t_uint64": {
+            "label": "uint64"
+          }
+        },
+        "namespaces": {
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts/proxy/utils/Initializable.sol:69"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts/proxy/utils/Initializable.sol:73"
+            }
+          ]
+        }
+      }
+    },
+    "8a14db821ebdf4ba10953e02707dd9602c2edd765db0427572cc91666d44de22": {
+      "address": "0xc9698dA5516C1bC146A4B124dFAfc02195a38243",
+      "txHash": "0x0e9abeee6a1633a9cb9e2795686009f2b0f73bb23c233ede216934313ca03547",
+      "layout": {
+        "solcVersion": "0.8.24",
+        "storage": [
+          {
+            "label": "filledSubtrees",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_uint256,t_bytes32)",
+            "contract": "MerkleTreeWithHistory",
+            "src": "contracts/MerkleTreeWithHistory.sol:22"
+          },
+          {
+            "label": "roots",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_mapping(t_uint256,t_bytes32)",
+            "contract": "MerkleTreeWithHistory",
+            "src": "contracts/MerkleTreeWithHistory.sol:23"
+          },
+          {
+            "label": "currentRootIndex",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint32",
+            "contract": "MerkleTreeWithHistory",
+            "src": "contracts/MerkleTreeWithHistory.sol:25"
+          },
+          {
+            "label": "nextIndex",
+            "offset": 4,
+            "slot": "2",
+            "type": "t_uint32",
+            "contract": "MerkleTreeWithHistory",
+            "src": "contracts/MerkleTreeWithHistory.sol:26"
+          },
+          {
+            "label": "__gap",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_array(t_uint256)47_storage",
+            "contract": "MerkleTreeWithHistory",
+            "src": "contracts/MerkleTreeWithHistory.sol:150"
+          },
+          {
+            "label": "_status",
+            "offset": 0,
+            "slot": "50",
+            "type": "t_uint256",
+            "contract": "EtherPool",
+            "src": "contracts/EtherPool.sol:13"
+          },
+          {
+            "label": "admin",
+            "offset": 0,
+            "slot": "51",
+            "type": "t_address",
+            "contract": "EtherPool",
+            "src": "contracts/EtherPool.sol:25"
+          },
+          {
+            "label": "pendingAdmin",
+            "offset": 0,
+            "slot": "52",
+            "type": "t_address",
+            "contract": "EtherPool",
+            "src": "contracts/EtherPool.sol:26"
+          },
+          {
+            "label": "maximumDepositAmount",
+            "offset": 0,
+            "slot": "53",
+            "type": "t_uint256",
+            "contract": "EtherPool",
+            "src": "contracts/EtherPool.sol:28"
+          },
+          {
+            "label": "nullifierHashes",
+            "offset": 0,
+            "slot": "54",
+            "type": "t_mapping(t_bytes32,t_bool)",
+            "contract": "EtherPool",
+            "src": "contracts/EtherPool.sol:29"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_array(t_uint256)47_storage": {
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
           },
           "t_bool": {
             "label": "bool",

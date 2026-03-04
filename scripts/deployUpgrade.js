@@ -21,23 +21,20 @@ async function main() {
 
   const EtherPoolV2 = await ethers.getContractFactory('EtherPool')
 
+  // OZ Contracts v5.x removed upgradeTo(); only upgradeToAndCall() exists.
+  // Use prepareUpgrade for validation + deployment, then call upgradeToAndCall directly.
+  const newImpl = await upgrades.prepareUpgrade(proxyAddress, EtherPoolV2, {
+    kind: 'uups',
+    constructorArgs: [verifier2Address, levels, hasherAddress],
+    unsafeAllow: ['state-variable-immutable', 'constructor'],
+  })
+  console.log(`New implementation deployed and validated at: ${newImpl}`)
+
   if (deployer.address.toLowerCase() === currentAdmin.toLowerCase()) {
-    // Direct upgrade: deployer is the admin
-    const upgraded = await upgrades.upgradeProxy(proxyAddress, EtherPoolV2, {
-      kind: 'uups',
-      constructorArgs: [verifier2Address, levels, hasherAddress],
-      unsafeAllow: ['state-variable-immutable', 'constructor'],
-    })
-    console.log(`EtherPool upgraded at proxy: ${upgraded.address}`)
+    const tx = await proxy.upgradeToAndCall(newImpl, '0x')
+    await tx.wait()
+    console.log(`EtherPool upgraded at proxy: ${proxyAddress}`)
   } else {
-    // Deployer is not the admin — deploy & validate the new implementation only.
-    // The admin (e.g. multisig) must call upgradeTo() separately.
-    const newImpl = await upgrades.prepareUpgrade(proxyAddress, EtherPoolV2, {
-      kind: 'uups',
-      constructorArgs: [verifier2Address, levels, hasherAddress],
-      unsafeAllow: ['state-variable-immutable', 'constructor'],
-    })
-    console.log(`New implementation deployed and validated at: ${newImpl}`)
     console.log(`Admin (${currentAdmin}) must call upgradeToAndCall(${newImpl}, "0x") on the proxy to complete the upgrade.`)
   }
 

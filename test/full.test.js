@@ -991,7 +991,7 @@ describe('EtherPool', function () {
 
     expect(commitmentV).to.be.equal(commitment)
     expect(nullifierV).to.be.equal(nullifier)
-    expect(await etherPool.nullifierHashes(nullifierV)).to.be.equal(true)
+    expect(await etherPool.nullifierHashes(toFixedHex(nullifierV))).to.be.equal(true)
     // expect commitmentV present onchain (it will be in NewCommitment events)
 
     // in report we can see the tx with NewCommitment event (this is how alice got money)
