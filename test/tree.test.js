@@ -109,6 +109,16 @@ describe('MerkleTreeWithHistory', function () {
       }
     })
 
+    it('should return correct zeros verified by on-chain hashLeftRight', async () => {
+      const { merkleTreeWithHistory } = await loadFixture(fixture)
+      for (let i = 0; i < 32; i++) {
+        const currentZero = await merkleTreeWithHistory.zeros(i)
+        const nextZero = await merkleTreeWithHistory.zeros(i + 1)
+        const computed = await merkleTreeWithHistory.hashLeftRight(currentZero, currentZero)
+        expect(nextZero).to.equal(computed, `zeros(${i + 1}) != hashLeftRight(zeros(${i}), zeros(${i}))`)
+      }
+    })
+
     it('should revert for out of bounds index', async () => {
       const { merkleTreeWithHistory } = await loadFixture(fixture)
       await expect(merkleTreeWithHistory.zeros(33)).to.be.revertedWith('Index out of bounds')
