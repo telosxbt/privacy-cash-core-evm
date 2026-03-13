@@ -99,10 +99,10 @@ describe('MerkleTreeWithHistory', function () {
       }
     })
 
-    it('should return correct zeros for all levels 0 through 32', async () => {
+    it('should return correct zeros for all levels 0 through 31', async () => {
       const { merkleTreeWithHistory } = await loadFixture(fixture)
       let current = ethers.BigNumber.from(MERKLE_TREE_ZERO_VALUE)
-      for (let i = 0; i <= 32; i++) {
+      for (let i = 0; i <= 31; i++) {
         const contractZero = await merkleTreeWithHistory.zeros(i)
         expect(contractZero).to.equal(toFixedHex(current), `zeros(${i}) mismatch`)
         current = poseidonHash2(current, current)
@@ -111,7 +111,7 @@ describe('MerkleTreeWithHistory', function () {
 
     it('should return correct zeros verified by on-chain hashLeftRight', async () => {
       const { merkleTreeWithHistory } = await loadFixture(fixture)
-      for (let i = 0; i < 32; i++) {
+      for (let i = 0; i < 31; i++) {
         const currentZero = await merkleTreeWithHistory.zeros(i)
         const nextZero = await merkleTreeWithHistory.zeros(i + 1)
         const computed = await merkleTreeWithHistory.hashLeftRight(currentZero, currentZero)
@@ -121,7 +121,7 @@ describe('MerkleTreeWithHistory', function () {
 
     it('should revert for out of bounds index', async () => {
       const { merkleTreeWithHistory } = await loadFixture(fixture)
-      await expect(merkleTreeWithHistory.zeros(33)).to.be.revertedWith('Index out of bounds')
+      await expect(merkleTreeWithHistory.zeros(32)).to.be.revertedWith('Index out of bounds')
     })
 
     it('should match the off-chain tree zero element at level 0', async () => {

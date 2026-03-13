@@ -8,14 +8,14 @@ const FIELD_SIZE = BigInt(
 const zeroValue = BigInt(ethers.utils.keccak256(ethers.utils.toUtf8Bytes('privacycash'))) % FIELD_SIZE
 
 const zeros = [zeroValue]
-for (let i = 1; i <= 32; i++) {
+for (let i = 1; i <= 31; i++) {
   zeros[i] = poseidon2([zeros[i - 1], zeros[i - 1]])
 }
 
 console.log('// default `zero` value is keccak256("privacycash") %% FIELD_SIZE')
 console.log(`// = ${zeroValue.toString()}\n`)
 
-for (let i = 0; i <= 32; i++) {
+for (let i = 0; i <= 31; i++) {
   const hex = '0x' + zeros[i].toString(16).padStart(64, '0')
   if (i === 0) {
     console.log(`if (i == ${i}) return bytes32(${hex});`)

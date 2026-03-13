@@ -109,7 +109,7 @@ contract MerkleTreeWithHistory is Initializable {
     return roots[currentRootIndex];
   }
 
-  /// @dev provides Zero (Empty) elements for a Poseidon MerkleTree. Up to 32 levels
+  /// @dev provides Zero (Empty) elements for a Poseidon MerkleTree. Up to 31 levels
   function zeros(uint256 i) public pure returns (bytes32) {
     if (i == 0) return bytes32(0x062e4bce6065dea73d3010d1bb9bf83bd767b11f178cd2349116e0649be4ce0e);
     else if (i == 1) return bytes32(0x203c69291329a6b2dbaa3d99dac0f6dae70c1f2cf9771d964cc65774d0058868);
@@ -143,7 +143,6 @@ contract MerkleTreeWithHistory is Initializable {
     else if (i == 29) return bytes32(0x18b42deaf69b75bf86bbae45a180117e1aff79b8aff5079ec7da18967bda2104);
     else if (i == 30) return bytes32(0x066aeacdb326f7a2033d53ffb94190030b9ca342a51557b37e1f2e5aa0c5b347);
     else if (i == 31) return bytes32(0x0e9e856377479d26ed15142f8647ee99818ed602a95ab45244cb692b990e09cc);
-    else if (i == 32) return bytes32(0x073eff5c02b924aa7848ce7e1a7790d64a1a48a60c0c41c877e9b7046a176088);
     else revert("Index out of bounds");
   }
 
