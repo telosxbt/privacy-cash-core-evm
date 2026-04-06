@@ -29,6 +29,9 @@ yarn test
 ## Deploy
 
 ```bash
+# Compile (always compile again before deployment!)
+yarn compile
+
 # Base Sepolia (testnet)
 npx hardhat run scripts/deploy.js --network baseSepolia
 
