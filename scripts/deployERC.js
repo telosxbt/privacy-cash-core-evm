@@ -3,10 +3,8 @@ const { utils } = ethers
 
 const MERKLE_TREE_HEIGHT = 26
 
-/** Base mainnet native USDC — see https://docs.base.org/tokens */
-const BASE_MAINNET_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-
-const TOKEN_ADDRESS = (process.env.TOKEN_ADDRESS || BASE_MAINNET_USDC).toLowerCase()
+/** Ethereum mainnet native USDT — see https://etherscan.io/token/0xdac17f958d2ee523a2206206994597c13d831ec7 */
+const TOKEN_ADDRESS = '0xdac17f958d2ee523a2206206994597c13d831ec7'.toLowerCase()
 const TOKEN_DECIMALS = parseInt(process.env.TOKEN_DECIMALS || '6', 10)
 
 const MAXIMUM_DEPOSIT_AMOUNT = process.env.MAXIMUM_DEPOSIT_AMOUNT
