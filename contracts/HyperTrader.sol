@@ -16,27 +16,40 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *           1. initiateTrade: the user (or a relayer on their behalf) submits a
  *              ZK withdrawal proof against the USDC pool with recipient = this
  *              controller. The pool verifies the proof (commitment in tree,
- *              nullifier unspent, etc.) and releases a fixed amount of USDC to
- *              the controller. The link to the original depositor is broken by
+ *              nullifier unspent, etc.) and releases a user-chosen amount of USDC
+ *              to the controller. The link to the original depositor is broken by
  *              the proof, exactly like a normal shielded withdrawal.
  *
  *           2. The controller bridges the USDC to HyperCore and places a spot
- *              buy for a FIXED base size of BTC (`btcNoteDenom`) with an IOC
- *              limit order. `limitPx` is the slippage cap; the fixed size is the
+ *              buy for a user-chosen base size of BTC (`p.size`) with an IOC
+ *              limit order. `limitPx` is the slippage cap; `p.size` is the
  *              minimum-BTC-received guarantee. An optional deadline bounds the
  *              order; unfilled orders can be cancelled (refund) or retried.
  *
  *           3. settleTrade: once the BTC fill is observed on HyperCore, the
- *              controller bridges exactly `btcNoteDenom` BTC back into the BTC
- *              pool and mints the user's pre-committed BTC note. The user can
- *              later withdraw/claim that BTC privately via the BTC pool, with no
+ *              controller bridges exactly `t.size` BTC back into the BTC pool and
+ *              mints the user's pre-committed BTC note. The user can later
+ *              withdraw/claim that BTC privately via the BTC pool, with no
  *              on-chain link to the USDC deposit that funded it.
  *
- *         Fixed input AND output sizes are what make the trade unlinkable: every
- *         trade looks identical on-chain. Any HyperCore residual (price improvement
- *         or leftover USDC) accrues to the protocol `coreAccount` and is swept by
- *         the admin; it is intentionally excluded from the private notes to keep
- *         every settlement deterministic.
+ *         PRIVACY MODEL: amounts are arbitrary (custom per trade), exactly like
+ *         the underlying Privacy Cash pools. Both pools use the 2-in/2-out UTXO
+ *         circuit, so a spend produces a *change note*: the deposit amount and
+ *         the traded amount are independent, and the input nullifier reveals
+ *         nothing about which note was spent. The deposit->trade and trade->claim
+ *         links are therefore NOT recoverable from amounts on either side.
+ *
+ *         What stays public is intrinsic to using a real on-chain venue: the
+ *         HyperCore order ties `usdcIn` <-> `size` under one `tradeId`. That pivot
+ *         is identity-blind (it points to a trade, not a depositor); the residual
+ *         leak is timing correlation against the pool's anonymity set, mitigated
+ *         the same way Privacy Cash does (healthy set + relayer/delay).
+ *
+ *         `btcNoteDenom` is retained as a per-trade *minimum* size (dust floor /
+ *         market-configured sentinel), not a fixed denomination. Any HyperCore
+ *         residual (price improvement or leftover USDC) accrues to the protocol
+ *         `coreAccount` and is swept by the admin; it is intentionally excluded
+ *         from the private notes to keep every settlement deterministic.
  */
 contract HyperTrader is ReentrancyGuard {
   using SafeERC20 for IERC20;
@@ -54,7 +67,7 @@ contract HyperTrader is ReentrancyGuard {
   uint64 public usdcCoreToken;
   uint64 public btcCoreToken;
   uint32 public btcSpotAsset;
-  uint64 public btcNoteDenom; // fixed BTC note size, in HyperCore core units
+  uint64 public btcNoteDenom; // minimum BTC size per trade (dust floor), in HyperCore core units
   uint64 public defaultDeadlineSecs;
   address public coreAccount; // HyperCore account holding protocol funds
 
@@ -81,6 +94,7 @@ contract HyperTrader is ReentrancyGuard {
   }
 
   struct InitiateParams {
+    uint64 size; // BTC base size to buy (core units), user-chosen; must be >= btcNoteDenom
     uint64 limitPx; // slippage cap (core px units)
     uint64 deadline; // unix seconds; 0 => now + defaultDeadlineSecs
     uint128 cloid; // client order id
@@ -174,6 +188,7 @@ contract HyperTrader is ReentrancyGuard {
     require(extData.extAmount < 0, "must be a withdrawal");
     require(p.limitPx > 0, "limitPx is zero");
     require(p.btcCommitment != bytes32(0), "btc commitment unset");
+    require(p.size >= btcNoteDenom, "size below minimum");
 
     uint256 usdcIn = uint256(-extData.extAmount);
 
@@ -189,11 +204,11 @@ contract HyperTrader is ReentrancyGuard {
 
     uint64 deadline = p.deadline == 0 ? uint64(block.timestamp) + defaultDeadlineSecs : p.deadline;
 
-    // Bounded market buy: IOC limit order, fixed base size = btcNoteDenom.
+    // Bounded market buy: IOC limit order, user-chosen base size = p.size.
     uint128 cloid = adapter.placeSpotBuy(
       IHyperCore.SpotBuyParams({
         asset: btcSpotAsset,
-        size: btcNoteDenom,
+        size: p.size,
         limitPx: p.limitPx,
         tif: IHyperCore.Tif.Ioc,
         cloid: p.cloid
@@ -204,7 +219,7 @@ contract HyperTrader is ReentrancyGuard {
     trades[tradeId] = Trade({
       initiator: msg.sender,
       usdcIn: usdcIn,
-      size: btcNoteDenom,
+      size: p.size,
       limitPx: p.limitPx,
       cloid: cloid,
       deadline: deadline,
@@ -216,7 +231,7 @@ contract HyperTrader is ReentrancyGuard {
       encryptedOutput2: p.encryptedOutput2
     });
 
-    emit TradeInitiated(tradeId, usdcIn, btcNoteDenom, p.limitPx, cloid);
+    emit TradeInitiated(tradeId, usdcIn, p.size, p.limitPx, cloid);
   }
 
   /**

@@ -45,7 +45,8 @@ contract HyperCoreAdapter is IHyperCore {
   uint160 internal constant SYSTEM_ADDRESS_BASE = uint160(0x2000000000000000000000000000000000000000);
 
   address public immutable coreWriter;
-  address public owner; // the HyperTrader allowed to drive this adapter
+  address public owner; // the HyperTrader allowed to drive this adapter (move funds, trade)
+  address public admin; // config role: links tokens / rotates roles (no fund access)
 
   struct TokenInfo {
     address evmToken; // ERC-20 on HyperEVM
@@ -63,18 +64,44 @@ contract HyperCoreAdapter is IHyperCore {
     _;
   }
 
+  modifier onlyAdmin() {
+    require(msg.sender == admin, "adapter: not admin");
+    _;
+  }
+
+  /**
+   * @param _coreWriter HyperCore CoreWriter system contract (0x333..3 on HyperEVM).
+   * @param _owner The HyperTrader controller allowed to move funds / place orders.
+   * @dev The deployer becomes `admin` (config role) so it can link tokens before
+   *      and after the trader is live, without ever gaining fund-moving rights.
+   */
   constructor(address _coreWriter, address _owner) {
     require(_coreWriter != address(0) && _owner != address(0), "adapter: zero addr");
     coreWriter = _coreWriter;
     owner = _owner;
+    admin = msg.sender;
   }
 
+  /// @notice Rotate the fund-moving owner (the HyperTrader controller). Admin-gated.
+  function transferOwner(address _owner) external onlyAdmin {
+    require(_owner != address(0), "adapter: zero addr");
+    owner = _owner;
+  }
+
+  /// @notice Rotate the config admin. Admin-gated.
+  function transferAdmin(address _admin) external onlyAdmin {
+    require(_admin != address(0), "adapter: zero addr");
+    admin = _admin;
+  }
+
+  /// @notice Link an EVM ERC-20 to its HyperCore spot token id. Config-only, no
+  ///         fund access, so it is gated on `admin` rather than `owner`.
   function registerToken(
     address evmToken,
     uint64 coreToken,
     uint8 evmDecimals,
     uint8 coreDecimals
-  ) external onlyOwner {
+  ) external onlyAdmin {
     tokens[coreToken] = TokenInfo(evmToken, coreToken, evmDecimals, coreDecimals, true);
   }
 

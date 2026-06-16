@@ -30,14 +30,17 @@ import "./ERCPool.sol";
  *      proxy). The controller contract is deterministic and auditable.
  */
 contract HyperPrivacyPool is ERCPool {
-  /// @notice Controller authorised to mint settlement notes.
-  address public trader;
+  /// @notice Controllers authorised to mint settlement notes. A *set* (not a
+  ///         single address) so one shared pool — e.g. the USDC pool — can back
+  ///         many per-asset {HyperTrader} markets at once. Every market then
+  ///         draws on the same anonymity set instead of fragmenting liquidity.
+  mapping(address => bool) public isTrader;
 
-  event TraderConfigured(address indexed trader);
+  event TraderConfigured(address indexed trader, bool authorised);
   event SettlementMinted(bytes32 indexed commitment1, bytes32 indexed commitment2);
 
   modifier onlyTrader() {
-    require(msg.sender == trader, "only trader");
+    require(isTrader[msg.sender], "only trader");
     _;
   }
 
@@ -49,11 +52,17 @@ contract HyperPrivacyPool is ERCPool {
     IERC20 _token
   ) ERCPool(_verifier2, _levels, _hasher, _token) {}
 
-  /// @notice Set (or rotate) the controller. Admin-gated.
+  /// @notice Authorise a controller (additive). Admin-gated.
   function configureTrader(address _trader) external onlyAdmin {
     require(_trader != address(0), "trader is zero address");
-    trader = _trader;
-    emit TraderConfigured(_trader);
+    isTrader[_trader] = true;
+    emit TraderConfigured(_trader, true);
+  }
+
+  /// @notice Revoke a controller. Admin-gated.
+  function revokeTrader(address _trader) external onlyAdmin {
+    isTrader[_trader] = false;
+    emit TraderConfigured(_trader, false);
   }
 
   /**

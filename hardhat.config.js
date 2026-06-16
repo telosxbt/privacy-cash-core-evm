@@ -104,6 +104,20 @@ const config = {
             mnemonic: 'test test test test test test test test test test test junk',
           },
     },
+    localhost: {
+      url: 'http://127.0.0.1:8545',
+      chainId: 1,
+    },
+    hyperevm: {
+      url: process.env.HYPEREVM_RPC || 'https://rpc.hyperliquid.xyz/evm',
+      chainId: 999,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+    },
+    hyperevmTestnet: {
+      url: process.env.HYPEREVM_TESTNET_RPC || 'https://rpc.hyperliquid-testnet.xyz/evm',
+      chainId: 998,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+    },
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_KEY,

@@ -209,6 +209,7 @@ describe('HyperTrader (privacy-preserving HyperCore spot trading)', function () 
 
     // initiate the anonymous trade
     const params = {
+      size: BTC_DENOM,
       limitPx: MARKET_PX, // exactly at market => fills
       deadline: 0,
       cloid: 1,
@@ -248,6 +249,93 @@ describe('HyperTrader (privacy-preserving HyperCore spot trading)', function () 
     expect(await btc.balanceOf(btcPool.address)).to.equal(0)
   })
 
+  it('custom amounts: deposit 5000, spend 1250 (keep 3750 change), buy a custom BTC size', async function () {
+    const { usdc, btc, usdcPool, btcPool, trader, mock, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const usdcTree = createEmptyTree()
+    const btcTree = createEmptyTree()
+    const [deployer] = await ethers.getSigners()
+
+    const DEPOSIT = BigNumber.from(5000)
+    const CUSTOM_SIZE = 250 // != BTC_DENOM, user-chosen BTC base size
+    const CUSTOM_USDC = BigNumber.from(CUSTOM_SIZE * MARKET_PX) // 1250
+    const CHANGE = DEPOSIT.sub(CUSTOM_USDC) // 3750 stays shielded
+
+    // user-chosen BTC note + its (empty) change note
+    const btcNote = new Utxo({ amount: BigNumber.from(CUSTOM_SIZE), keypair })
+    const btcChange = new Utxo({ amount: 0, keypair })
+
+    // 1. shielded deposit of 5000 USDC
+    const depositUtxo = new Utxo({ amount: DEPOSIT, keypair })
+    await usdc.mint(deployer.address, DEPOSIT)
+    await poolTransact({ pool: usdcPool, token: usdc, tree: usdcTree, outputs: [depositUtxo], encryptionKey })
+
+    // 2. spend the 5000 note: 1250 to the controller, 3750 back as a change note
+    const changeUtxo = new Utxo({ amount: CHANGE, keypair })
+    const { args, extData } = await prepareTransaction({
+      tree: usdcTree,
+      inputs: [depositUtxo],
+      outputs: [changeUtxo],
+      recipient: trader.address,
+      encryptionKey,
+    })
+    expect(BigNumber.from(extData.extAmount).mul(-1)).to.equal(CUSTOM_USDC) // only 1250 leaves the pool
+
+    const params = {
+      size: CUSTOM_SIZE,
+      limitPx: MARKET_PX,
+      deadline: 0,
+      cloid: 21,
+      btcCommitment: toFixedHex(btcNote.getCommitment()),
+      btcCommitment2: toFixedHex(btcChange.getCommitment()),
+      refundCommitment: ethers.constants.HashZero,
+      encryptedOutput1: btcNote.encrypt(encryptionKey),
+      encryptedOutput2: btcChange.encrypt(encryptionKey),
+    }
+    await expect(trader.connect(keeper).initiateTrade(args, extData, params)).to.emit(trader, 'TradeInitiated')
+
+    // exactly the custom size was bought; the 3750 change stays in the pool
+    expect(await mock.coreBalance(BTC_CORE)).to.equal(CUSTOM_SIZE)
+    expect(await usdc.balanceOf(usdcPool.address)).to.equal(CHANGE)
+
+    await trader.connect(keeper).settleTrade(0)
+    btcTree.insert(toFixedHex(btcNote.getCommitment()))
+    btcTree.insert(toFixedHex(btcChange.getCommitment()))
+    expect(await btc.balanceOf(btcPool.address)).to.equal(CUSTOM_SIZE)
+
+    // private claim of the custom-size BTC note to a fresh address
+    const recipient = '0x000000000000000000000000000000000000bEEF'
+    await poolTransact({
+      pool: btcPool,
+      token: btc,
+      tree: btcTree,
+      inputs: [btcNote],
+      outputs: [],
+      recipient,
+      encryptionKey,
+    })
+    expect(await btc.balanceOf(recipient)).to.equal(CUSTOM_SIZE)
+  })
+
+  it('rejects a trade whose size is below the configured minimum', async function () {
+    const { usdc, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const usdcTree = createEmptyTree()
+    const { btcNote, btcChange } = buildTradeNotes({ keypair, encryptionKey })
+    const { args, extData } = await depositAndProveWithdraw({ usdcPool, usdc, tree: usdcTree, keypair, encryptionKey, trader })
+
+    const params = {
+      size: BTC_DENOM - 1, // below the dust floor
+      limitPx: MARKET_PX,
+      deadline: 0,
+      cloid: 31,
+      btcCommitment: toFixedHex(btcNote.getCommitment()),
+      btcCommitment2: toFixedHex(btcChange.getCommitment()),
+      refundCommitment: ethers.constants.HashZero,
+      encryptedOutput1: '0x',
+      encryptedOutput2: '0x',
+    }
+    await expect(trader.connect(keeper).initiateTrade(args, extData, params)).to.be.revertedWith('size below minimum')
+  })
+
   it('slippage protection: order does not fill above limit, then retry succeeds', async function () {
     const { usdc, btc, usdcPool, btcPool, trader, mock, alice, keeper, encryptionKey, keypair } = await loadFixture(fixture)
     const usdcTree = createEmptyTree()
@@ -256,6 +344,7 @@ describe('HyperTrader (privacy-preserving HyperCore spot trading)', function () 
     const { args, extData } = await depositAndProveWithdraw({ usdcPool, usdc, tree: usdcTree, alice, keypair, encryptionKey, trader })
 
     const params = {
+      size: BTC_DENOM,
       limitPx: MARKET_PX - 1, // below market => no fill
       deadline: 0,
       cloid: 7,
@@ -289,6 +378,7 @@ describe('HyperTrader (privacy-preserving HyperCore spot trading)', function () 
     const { args, extData } = await depositAndProveWithdraw({ usdcPool, usdc, tree: usdcTree, alice, keypair, encryptionKey, trader })
 
     const params = {
+      size: BTC_DENOM,
       limitPx: MARKET_PX - 1, // no fill
       deadline: 1, // already in the past
       cloid: 11,
@@ -341,6 +431,7 @@ describe('HyperTrader (privacy-preserving HyperCore spot trading)', function () 
       encryptionKey,
     })
     const params = {
+      size: BTC_DENOM,
       limitPx: MARKET_PX,
       deadline: 0,
       cloid: 99,
