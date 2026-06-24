@@ -135,7 +135,7 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     const tradeImpl = await deploy('TradeAccount')
     const trader = await deploy('HyperTrader', admin.address, usdcPool.address, tradeImpl.address)
 
-    await trader.connect(admin).configureCore(mock.address, USDC_CORE)
+    await trader.connect(admin).configureCore(mock.address, USDC_CORE, 3600)
     await mock.register(USDC_CORE, usdc.address)
     await mock.register(ASSET_CORE, asset.address)
     await mock.setMarket(ASSET_SPOT, ASSET_CORE, USDC_CORE, PX)
@@ -147,8 +147,8 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     return { usdc, asset, usdcPool, trader, mock, admin, alice, keeper, encryptionKey, keypair }
   }
 
-  function tradeParams({ size = SIZE, limitPx = PX, cloid = 1, recipient = FRESH, venue = VENUE_EVM }) {
-    return { asset: ASSET_SPOT, assetCoreToken: ASSET_CORE, size, limitPx, cloid, recipient, venue }
+  function tradeParams({ size = SIZE, limitPx = PX, cloid = 1, recipient = FRESH, venue = VENUE_EVM, deadline = 0 }) {
+    return { asset: ASSET_SPOT, assetCoreToken: ASSET_CORE, size, limitPx, cloid, recipient, venue, deadline }
   }
 
   // Deposit `deposit` USDC (shielded) and return a withdrawal proof to the controller.
@@ -237,8 +237,32 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     expect(await asset.balanceOf(FRESH)).to.equal(SIZE)
   })
 
+  it('cancel: an expired, unfilled trade refunds the USDC to the recipient', async function () {
+    const { usdc, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const tree = createEmptyTree()
+    const { args, extData } = await spend({ usdcPool, usdc, tree, keypair, encryptionKey, trader, deposit: USDC_IN, withdraw: USDC_IN })
+
+    // unfillable order + deadline already in the past
+    await trader.connect(keeper).trade(args, extData, tradeParams({ limitPx: PX - 1, cloid: 5, deadline: 1 }))
+    await expect(trader.connect(keeper).cancel(0)).to.emit(trader, 'Cancelled')
+
+    // the USDC the user wanted to spend is refunded to their chosen recipient
+    expect(await usdc.balanceOf(FRESH)).to.equal(USDC_IN)
+    const t = await trader.trades(0)
+    expect(t.status).to.equal(3) // Cancelled
+  })
+
+  it('cancel: reverts before the deadline', async function () {
+    const { usdc, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const tree = createEmptyTree()
+    const { args, extData } = await spend({ usdcPool, usdc, tree, keypair, encryptionKey, trader, deposit: USDC_IN, withdraw: USDC_IN })
+    // default deadline (now + 3600), not yet passed
+    await trader.connect(keeper).trade(args, extData, tradeParams({ limitPx: PX - 1, cloid: 6 }))
+    await expect(trader.connect(keeper).cancel(0)).to.be.revertedWith('before deadline')
+  })
+
   it('access control: only admin configures core', async function () {
     const { trader, alice, mock } = await loadFixture(fixture)
-    await expect(trader.connect(alice).configureCore(mock.address, USDC_CORE)).to.be.revertedWith('only admin')
+    await expect(trader.connect(alice).configureCore(mock.address, USDC_CORE, 3600)).to.be.revertedWith('only admin')
   })
 })

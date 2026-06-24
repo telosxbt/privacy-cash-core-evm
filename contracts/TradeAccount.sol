@@ -55,9 +55,10 @@ contract TradeAccount {
     core.placeSpotBuy(p);
   }
 
-  /// @notice Send `size` of the bought asset from this account to `dest`.
-  ///         `toEvm` selects HyperEVM (ERC-20) vs HyperCore (spot account) delivery.
-  function deliver(address dest, uint64 assetCoreToken, uint64 size, bool toEvm) external onlyOwner {
-    core.spotSend(dest, assetCoreToken, size, toEvm);
+  /// @notice Send `amount` of `coreToken` from this account to `dest`. Used both
+  ///         to deliver the bought asset and to refund USDC on cancel.
+  ///         `toEvm` selects HyperEVM (ERC-20) vs HyperCore (spot account).
+  function sendTo(address dest, uint64 coreToken, uint64 amount, bool toEvm) external onlyOwner {
+    core.spotSend(dest, coreToken, amount, toEvm);
   }
 }

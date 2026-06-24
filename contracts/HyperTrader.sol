@@ -51,6 +51,7 @@ contract HyperTrader is ReentrancyGuard {
   address public immutable tradeAccountImpl; // EIP-1167 implementation for clones
 
   uint64 public usdcCoreToken; // HyperCore spot token id for USDC
+  uint64 public defaultDeadlineSecs; // applied when a trade passes deadline = 0
 
   enum Venue {
     Evm, // deliver as ERC-20 on HyperEVM
@@ -60,15 +61,17 @@ contract HyperTrader is ReentrancyGuard {
   enum Status {
     None,
     Open,
-    Delivered
+    Delivered,
+    Cancelled
   }
 
   struct Trade {
     address account; // the cloned TradeAccount holding this trade's funds
-    address recipient; // where the bought asset is delivered
+    address recipient; // where the bought asset (or a refund) is delivered
     uint64 assetCoreToken; // core token id of the bought asset
     uint64 size; // base size bought (sz units)
     Venue venue;
+    uint64 deadline; // unix seconds; after this, cancel() can refund
     Status status;
   }
 
@@ -78,8 +81,9 @@ contract HyperTrader is ReentrancyGuard {
     uint64 size; // base size to buy (sz units)
     uint64 limitPx; // slippage cap (core px units)
     uint128 cloid; // client order id
-    address recipient; // destination address for the bought asset
+    address recipient; // destination address for the bought asset / refund
     Venue venue; // EVM (ERC-20) or CORE (spot account)
+    uint64 deadline; // unix seconds; 0 => now + defaultDeadlineSecs
   }
 
   mapping(uint256 => Trade) public trades;
@@ -100,6 +104,7 @@ contract HyperTrader is ReentrancyGuard {
     uint8 venue
   );
   event Delivered(uint256 indexed tradeId, address recipient, uint64 assetCoreToken, uint64 size, uint8 venue);
+  event Cancelled(uint256 indexed tradeId, address recipient, uint64 usdcRefunded, uint64 assetRefunded);
 
   modifier onlyAdmin() {
     require(msg.sender == admin, "only admin");
@@ -118,10 +123,11 @@ contract HyperTrader is ReentrancyGuard {
 
   // ----------------------------------------------------------------- config
 
-  function configureCore(IHyperCore _core, uint64 _usdcCoreToken) external onlyAdmin {
+  function configureCore(IHyperCore _core, uint64 _usdcCoreToken, uint64 _defaultDeadlineSecs) external onlyAdmin {
     require(address(_core) != address(0), "zero address");
     core = _core;
     usdcCoreToken = _usdcCoreToken;
+    defaultDeadlineSecs = _defaultDeadlineSecs;
     emit CoreConfigured(address(_core), _usdcCoreToken);
   }
 
@@ -181,12 +187,14 @@ contract HyperTrader is ReentrancyGuard {
       IHyperCore.SpotBuyParams({asset: p.asset, size: p.size, limitPx: p.limitPx, tif: IHyperCore.Tif.Ioc, cloid: p.cloid})
     );
 
+    uint64 deadline = p.deadline == 0 ? uint64(block.timestamp) + defaultDeadlineSecs : p.deadline;
     trades[tradeId] = Trade({
       account: acct,
       recipient: p.recipient,
       assetCoreToken: p.assetCoreToken,
       size: p.size,
       venue: p.venue,
+      deadline: deadline,
       status: Status.Open
     });
 
@@ -205,9 +213,32 @@ contract HyperTrader is ReentrancyGuard {
     require(core.spotBalance(t.account, t.assetCoreToken) >= t.size, "not filled");
 
     t.status = Status.Delivered;
-    TradeAccount(t.account).deliver(t.recipient, t.assetCoreToken, t.size, t.venue == Venue.Evm);
+    TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, t.size, t.venue == Venue.Evm);
 
     emit Delivered(tradeId, t.recipient, t.assetCoreToken, t.size, uint8(t.venue));
+  }
+
+  /**
+   * @notice Refund an expired, undelivered trade: sweep whatever sits on the
+   *         trade's account — unspent USDC (order never filled) and/or any asset
+   *         (partial fill) — to the user's `recipient`, using the trade's `venue`.
+   *         Permissionless; the relayer calls it once `deadline` has passed.
+   */
+  function cancel(uint256 tradeId) external nonReentrant {
+    Trade storage t = trades[tradeId];
+    require(t.status == Status.Open, "not open");
+    require(block.timestamp > t.deadline, "before deadline");
+
+    uint64 usdcBal = core.spotBalance(t.account, usdcCoreToken);
+    uint64 assetBal = core.spotBalance(t.account, t.assetCoreToken);
+    require(usdcBal > 0 || assetBal > 0, "nothing to refund");
+
+    bool toEvm = t.venue == Venue.Evm;
+    t.status = Status.Cancelled;
+    if (usdcBal > 0) TradeAccount(t.account).sendTo(t.recipient, usdcCoreToken, usdcBal, toEvm);
+    if (assetBal > 0) TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, assetBal, toEvm);
+
+    emit Cancelled(tradeId, t.recipient, usdcBal, assetBal);
   }
 
   /// @notice Deterministic address of a trade's account (set even before trade()).

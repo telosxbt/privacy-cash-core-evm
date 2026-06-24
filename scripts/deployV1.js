@@ -29,6 +29,7 @@ const ADMIN = process.env.ADMIN // defaults to deployer if unset
 const USDC = (process.env.USDC || '').toLowerCase()
 const USDC_DECIMALS = parseInt(process.env.USDC_DECIMALS || '6', 10)
 const USDC_CORE_TOKEN = parseInt(process.env.USDC_CORE_TOKEN || '0', 10)
+const DEADLINE_SECS = parseInt(process.env.DEADLINE_SECS || '300', 10)
 const CORE_GATEWAY = process.env.CORE_GATEWAY // IHyperCore impl; optional at deploy time
 
 const USDC_MAX = utils.parseUnits(process.env.USDC_MAX || '1000000', USDC_DECIMALS)
@@ -87,11 +88,11 @@ async function main() {
   console.log(`Trader:            ${trader.address}`)
 
   if (CORE_GATEWAY && admin.toLowerCase() === deployer.address.toLowerCase()) {
-    await (await trader.configureCore(CORE_GATEWAY, USDC_CORE_TOKEN)).wait()
+    await (await trader.configureCore(CORE_GATEWAY, USDC_CORE_TOKEN, DEADLINE_SECS)).wait()
     console.log(`Wired core gateway ${CORE_GATEWAY}.`)
   } else {
     console.log('\n⚠️  configureCore not set. Once the HyperCore gateway is deployed, the admin must call:')
-    console.log(`  trader.configureCore(<IHyperCore gateway>, ${USDC_CORE_TOKEN})`)
+    console.log(`  trader.configureCore(<IHyperCore gateway>, ${USDC_CORE_TOKEN}, ${DEADLINE_SECS})`)
   }
 
   const out = {
