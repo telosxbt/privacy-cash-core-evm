@@ -54,8 +54,9 @@ const config = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: 1,
           },
+          viaIR: true,
         },
       },
     ],
@@ -98,6 +99,24 @@ const config = {
     base: {
       url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`,
       chainId: 8453,
+      accounts: process.env.PRIVATE_KEY
+        ? [process.env.PRIVATE_KEY]
+        : {
+            mnemonic: 'test test test test test test test test test test test junk',
+          },
+    },
+    hyperEvmTestnet: {
+      url: `https://hyperliquid-testnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`,
+      chainId: 998,
+      accounts: process.env.PRIVATE_KEY
+        ? [process.env.PRIVATE_KEY]
+        : {
+            mnemonic: 'test test test test test test test test test test test junk',
+          },
+    },
+    hyperEvm: {
+      url: `https://hyperliquid-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`,
+      chainId: 999,
       accounts: process.env.PRIVATE_KEY
         ? [process.env.PRIVATE_KEY]
         : {

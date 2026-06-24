@@ -9,6 +9,7 @@ if (!fs.existsSync(outputPath)) {
   fs.mkdirSync(outputPath, { recursive: true })
 }
 
+const bytecode = genContract.createCode(2)
 const contract = {
   _format: 'hh-sol-artifact-1',
   sourceName: 'contracts/Hasher.sol',
@@ -16,7 +17,8 @@ const contract = {
   deployedLinkReferences: {},
   contractName: 'Hasher',
   abi: genContract.generateABI(2),
-  bytecode: genContract.createCode(2),
+  bytecode,
+  deployedBytecode: bytecode,
 }
 
 fs.writeFileSync(outputFile, JSON.stringify(contract, null, 2))
