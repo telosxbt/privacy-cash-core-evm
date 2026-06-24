@@ -6,19 +6,19 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../hypercore/IHyperCore.sol";
 
 /**
- * @title MockHyperCore (v1)
- * @notice Deterministic in-memory simulator of the HyperCore side used in tests.
+ * @title MockHyperCore (v1 — per-account gateway)
+ * @notice Deterministic simulator of HyperCore that tracks balances PER CALLER,
+ *         mirroring how HyperCore attributes a spot account to each address. Each
+ *         {TradeAccount} therefore has its own isolated balances.
  *
- *           - bridgeToCore: the caller has already transferred the ERC-20 to this
- *             mock (mirroring "tokens sent to the system address"); the mock
- *             credits the core balance and custodies the ERC-20.
- *           - placeSpotBuy: an IOC limit buy that fills fully iff the configured
- *             market price <= limitPx, debiting USDC core and crediting asset core.
- *           - bridgeToEvm: debits core and transfers the linked ERC-20 to the
- *             recipient from the mock's inventory (the trade proceeds).
+ *           - bridgeToCore: pulls the caller's ERC-20 and credits the caller's core.
+ *           - placeSpotBuy: an IOC buy that fills fully iff marketPx <= limitPx,
+ *             debiting the caller's USDC and crediting the caller's asset balance.
+ *           - spotSend: moves the caller's asset to `dest` — to HyperEVM (transfer
+ *             the ERC-20 from the mock's inventory) or to `dest`'s core account.
+ *           - spotBalance: synchronous per-account read.
  *
- *         Token amounts are treated 1:1 between EVM and core units (configurable
- *         sz->wei factor) to keep test arithmetic exact.
+ *         Amounts are treated 1:1 between EVM and core (configurable sz->wei factor).
  */
 contract MockHyperCore is IHyperCore {
   using SafeERC20 for IERC20;
@@ -29,13 +29,14 @@ contract MockHyperCore is IHyperCore {
   }
 
   mapping(uint64 => Tok) public tokenOf;
-  mapping(uint64 => uint64) public coreBalance; // coreToken => protocol core balance (wei units)
-  mapping(uint64 => uint64) public szFactor; // coreToken => 10^(weiDecimals-szDecimals); 0 means 1 (1:1)
+  // account => coreToken => spot balance (wei units)
+  mapping(address => mapping(uint64 => uint64)) public coreBalance;
+  mapping(uint64 => uint64) public szFactor; // coreToken => 10^(weiDecimals-szDecimals); 0 => 1
 
   uint32 public assetSpot;
   uint64 public assetCoreToken;
   uint64 public usdcCoreToken;
-  uint64 public marketPx; // USDC core units paid per 1 asset core unit
+  uint64 public marketPx; // USDC core units per 1 asset core unit
 
   function register(uint64 coreToken, address evmToken) external {
     tokenOf[coreToken] = Tok(evmToken, true);
@@ -52,7 +53,6 @@ contract MockHyperCore is IHyperCore {
     marketPx = _px;
   }
 
-  /// @notice Configure the sz->wei scale for a token (default 1 = 1:1).
   function setSzFactor(uint64 coreToken, uint64 factor) external {
     szFactor[coreToken] = factor;
   }
@@ -71,8 +71,9 @@ contract MockHyperCore is IHyperCore {
   function bridgeToCore(address token, uint64 coreToken, uint256 amount) external returns (uint64 creditedCore) {
     Tok memory t = tokenOf[coreToken];
     require(t.registered && t.evmToken == token, "mock: token");
+    IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
     creditedCore = uint64(amount);
-    coreBalance[coreToken] += creditedCore;
+    coreBalance[msg.sender][coreToken] += creditedCore;
   }
 
   /// @inheritdoc IHyperCore
@@ -83,23 +84,26 @@ contract MockHyperCore is IHyperCore {
       return cloid;
     }
     uint64 cost = p.size * marketPx;
-    require(coreBalance[usdcCoreToken] >= cost, "mock: insufficient usdc on core");
-    coreBalance[usdcCoreToken] -= cost;
-    coreBalance[assetCoreToken] += uint64(uint256(p.size) * _factor(assetCoreToken));
+    require(coreBalance[msg.sender][usdcCoreToken] >= cost, "mock: insufficient usdc on core");
+    coreBalance[msg.sender][usdcCoreToken] -= cost;
+    coreBalance[msg.sender][assetCoreToken] += uint64(uint256(p.size) * _factor(assetCoreToken));
   }
 
   /// @inheritdoc IHyperCore
-  function bridgeToEvm(
-    uint64 coreToken,
-    uint64 coreAmount,
-    address recipient
-  ) external returns (address token, uint256 amount) {
-    Tok memory t = tokenOf[coreToken];
-    require(t.registered, "mock: token");
-    require(coreBalance[coreToken] >= coreAmount, "mock: insufficient core balance");
-    coreBalance[coreToken] -= coreAmount;
-    amount = uint256(coreAmount);
-    IERC20(t.evmToken).safeTransfer(recipient, amount);
-    return (t.evmToken, amount);
+  function spotBalance(address account, uint64 coreToken) external view returns (uint64) {
+    return coreBalance[account][coreToken];
+  }
+
+  /// @inheritdoc IHyperCore
+  function spotSend(address dest, uint64 coreToken, uint64 amount, bool toEvm) external {
+    require(coreBalance[msg.sender][coreToken] >= amount, "mock: insufficient core balance");
+    coreBalance[msg.sender][coreToken] -= amount;
+    if (toEvm) {
+      Tok memory t = tokenOf[coreToken];
+      require(t.registered, "mock: token");
+      IERC20(t.evmToken).safeTransfer(dest, amount); // Core -> EVM: credit the ERC-20
+    } else {
+      coreBalance[dest][coreToken] += amount; // stays on HyperCore
+    }
   }
 }

@@ -1,20 +1,22 @@
 /**
- * Deploy the HyperTrader v1 stack (buy-only, fire-and-forget) on HyperEVM:
+ * Deploy the HyperTrader v1 stack (sub-account buys) on HyperEVM:
  *
- *   - USDC privacy pool (ERCPool)        : shielded deposit/withdraw of USDC
- *   - HYPE privacy pool (EtherPool)      : shielded deposit/withdraw of native HYPE
- *   - HyperCoreAdapter                   : EVM <-> HyperCore bridge + spot buys
- *   - HyperTrader                        : spend shielded USDC -> spot buy -> send
- *                                          the bought asset to a fresh address
+ *   - USDC privacy pool (ERCPool)   : shielded deposit/withdraw of USDC
+ *   - HYPE privacy pool (EtherPool) : shielded deposit/withdraw of native HYPE
+ *   - TradeAccount implementation   : EIP-1167 template, one clone per trade
+ *   - HyperTrader                   : spend shielded USDC -> isolated spot buy
+ *                                     -> deliver(tradeId) to a fresh address
+ *                                        (EVM ERC-20 or HyperCore account)
  *
- * The pools need NO trader role: the controller only ever uses the standard
- * withdrawal path. Deposits/withdrawals (and trades) are submitted by a relayer
- * that pays gas in HYPE and is reimbursed via the in-token `fee` field.
+ * The pools need NO trader role (the controller only uses the standard withdrawal
+ * path). trade()/deliver() are permissionless; a relayer submits both and is
+ * reimbursed via the in-token `fee` field.
  *
- * Configure via env vars (see DEFAULTS below). Register the buyable assets
- * (BTC/ETH/HYPE/...) on the adapter via ASSETS (JSON array).
- *
- *   ASSETS='[{"evmToken":"0x..","coreToken":1242,"evmDecimals":18,"coreDecimals":9,"szDecimals":4}]'
+ * PRODUCTION NOTE: `configureCore` expects a HyperCore gateway implementing
+ * {IHyperCore} where each {TradeAccount}'s calls act on ITS OWN core account
+ * (raw CoreWriter actions issued from the TradeAccount). That production gateway
+ * is an integration step; this script deploys the EVM-side stack and prints the
+ * call to wire it once available.
  */
 const fs = require('fs')
 const path = require('path')
@@ -22,15 +24,12 @@ const { ethers } = require('hardhat')
 const { utils } = ethers
 
 const MERKLE_TREE_HEIGHT = 26
-const CORE_WRITER = process.env.CORE_WRITER || '0x3333333333333333333333333333333333333333'
 
 const ADMIN = process.env.ADMIN // defaults to deployer if unset
 const USDC = (process.env.USDC || '').toLowerCase()
 const USDC_DECIMALS = parseInt(process.env.USDC_DECIMALS || '6', 10)
 const USDC_CORE_TOKEN = parseInt(process.env.USDC_CORE_TOKEN || '0', 10)
-const USDC_CORE_DECIMALS = parseInt(process.env.USDC_CORE_DECIMALS || '8', 10)
-const USDC_SZ_DECIMALS = parseInt(process.env.USDC_SZ_DECIMALS || '0', 10)
-const DEADLINE_SECS = parseInt(process.env.DEADLINE_SECS || '300', 10)
+const CORE_GATEWAY = process.env.CORE_GATEWAY // IHyperCore impl; optional at deploy time
 
 const USDC_MAX = utils.parseUnits(process.env.USDC_MAX || '1000000', USDC_DECIMALS)
 const USDC_MIN = utils.parseUnits(process.env.USDC_MIN || '1', USDC_DECIMALS)
@@ -65,7 +64,6 @@ async function main() {
   console.log(`Verifier2: ${verifier2.address}`)
   console.log(`Hasher:    ${hasher.address}`)
 
-  // USDC pool (ERC-20) + HYPE pool (native).
   const ERCPool = await ethers.getContractFactory('ERCPool')
   const { proxy: usdcPool, impl: usdcImpl } = await deployProxy(
     ERCPool,
@@ -81,29 +79,19 @@ async function main() {
   console.log(`USDC pool: ${usdcPool.address}`)
   console.log(`HYPE pool: ${hypePool.address}`)
 
-  // Trader (quote = USDC pool) then adapter (owner = trader).
-  const trader = await (await ethers.getContractFactory('HyperTrader')).deploy(admin, usdcPool.address)
+  const tradeImpl = await (await ethers.getContractFactory('TradeAccount')).deploy()
+  await tradeImpl.deployed()
+  const trader = await (await ethers.getContractFactory('HyperTrader')).deploy(admin, usdcPool.address, tradeImpl.address)
   await trader.deployed()
-  const adapter = await (await ethers.getContractFactory('HyperCoreAdapter')).deploy(CORE_WRITER, trader.address)
-  await adapter.deployed()
-  console.log(`Trader:    ${trader.address}`)
-  console.log(`Adapter:   ${adapter.address}`)
+  console.log(`TradeAccount impl: ${tradeImpl.address}`)
+  console.log(`Trader:            ${trader.address}`)
 
-  // Register USDC + the buyable assets on the adapter (deployer is adapter admin).
-  await (await adapter.registerToken(USDC, USDC_CORE_TOKEN, USDC_DECIMALS, USDC_CORE_DECIMALS, USDC_SZ_DECIMALS)).wait()
-  const assets = JSON.parse(process.env.ASSETS || '[]')
-  for (const a of assets) {
-    await (await adapter.registerToken(a.evmToken, a.coreToken, a.evmDecimals, a.coreDecimals, a.szDecimals)).wait()
-    console.log(`  registered asset coreToken=${a.coreToken} (${a.evmToken})`)
-  }
-
-  // Wire the adapter into the trader (admin-gated).
-  if (admin.toLowerCase() === deployer.address.toLowerCase()) {
-    await (await trader.configureAdapter(adapter.address, USDC_CORE_TOKEN, DEADLINE_SECS)).wait()
-    console.log('Wiring complete (trader.configureAdapter).')
+  if (CORE_GATEWAY && admin.toLowerCase() === deployer.address.toLowerCase()) {
+    await (await trader.configureCore(CORE_GATEWAY, USDC_CORE_TOKEN)).wait()
+    console.log(`Wired core gateway ${CORE_GATEWAY}.`)
   } else {
-    console.log('\n⚠️  Admin != deployer. Have the admin call:')
-    console.log(`  trader.configureAdapter(${adapter.address}, ${USDC_CORE_TOKEN}, ${DEADLINE_SECS})`)
+    console.log('\n⚠️  configureCore not set. Once the HyperCore gateway is deployed, the admin must call:')
+    console.log(`  trader.configureCore(<IHyperCore gateway>, ${USDC_CORE_TOKEN})`)
   }
 
   const out = {
@@ -112,15 +100,15 @@ async function main() {
     admin,
     verifier2: verifier2.address,
     hasher: hasher.address,
-    adapter: adapter.address,
+    tradeAccountImpl: tradeImpl.address,
     trader: trader.address,
-    coreWriter: CORE_WRITER,
+    coreGateway: CORE_GATEWAY || null,
+    usdcCoreToken: USDC_CORE_TOKEN,
     merkleTreeHeight: MERKLE_TREE_HEIGHT,
     pools: {
-      usdc: { pool: usdcPool.address, impl: usdcImpl.address, token: USDC, decimals: USDC_DECIMALS, coreToken: USDC_CORE_TOKEN },
+      usdc: { pool: usdcPool.address, impl: usdcImpl.address, token: USDC, decimals: USDC_DECIMALS },
       hype: { pool: hypePool.address, impl: hypeImpl.address, native: true },
     },
-    assets,
   }
   const dir = path.join(__dirname, '..', 'deployments')
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
