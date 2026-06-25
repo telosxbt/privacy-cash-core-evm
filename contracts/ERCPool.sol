@@ -6,6 +6,7 @@ import "./Verifier2.sol";
 import "./MerkleTreeWithHistory.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -83,7 +84,68 @@ contract ERCPool is MerkleTreeWithHistory, UUPSUpgradeable, ReentrancyGuard, Pau
     super._initialize();
   }
 
-  function transact(Proof memory _args, ExtData memory _extData) public nonReentrant whenNotPaused {
+  /// @notice Off-chain authorizations for a gasless (relayer-submitted) deposit.
+  /// @dev `permit*` is the token's EIP-2612 permit (sets allowance owner->pool).
+  ///      `auth*` is the owner's signature over THIS deposit's output commitments
+  ///      (see {depositWithPermit}); it stops a relayer from pairing the owner's
+  ///      permit with a note the relayer controls.
+  struct PermitData {
+    address owner; // depositor; tokens are pulled from here
+    uint256 value; // permit allowance value (>= extAmount)
+    uint256 deadline; // shared deadline for permit + auth
+    uint8 permitV;
+    bytes32 permitR;
+    bytes32 permitS;
+    uint8 authV;
+    bytes32 authR;
+    bytes32 authS;
+  }
+
+  /// @notice Standard deposit/withdraw. Deposits pull tokens from `msg.sender`.
+  function transact(Proof memory _args, ExtData memory _extData) public {
+    _transact(_args, _extData, msg.sender);
+  }
+
+  /**
+   * @notice Gasless deposit: a relayer submits the tx (and pays the gas) while the
+   *         USDC is pulled from `p.owner` via EIP-2612 permit. The owner also signs
+   *         an authorization bound to this exact deposit, so the relayer cannot
+   *         redirect the deposit to a different note.
+   * @dev Deposit-only (`extAmount > 0`). Privacy is unaffected (deposits are
+   *      public); this only removes the need for the user to hold gas (HYPE).
+   *      Requires the token to support EIP-2612 (`permit`).
+   */
+  function depositWithPermit(Proof memory _args, ExtData memory _extData, PermitData calldata p) public {
+    require(_extData.extAmount > 0, "deposit only");
+    require(block.timestamp <= p.deadline, "auth expired");
+
+    // 1) Owner authorizes the token allowance (no gas for them).
+    IERC20Permit(address(token)).permit(p.owner, address(this), p.value, p.deadline, p.permitV, p.permitR, p.permitS);
+
+    // 2) Owner authorizes THIS deposit's exact output notes + amount. Without this,
+    //    a relayer could reuse the permit to fund a note it controls. EIP-191
+    //    personal-sign digest, recovered with the builtin ecrecover (no Cancun
+    //    opcodes, unlike OZ's ECDSA which pulls in mcopy).
+    bytes32 inner = keccak256(
+      abi.encode(
+        "PrivacyCashDeposit",
+        block.chainid,
+        address(this),
+        _args.outputCommitments[0],
+        _args.outputCommitments[1],
+        _extData.extAmount,
+        p.deadline
+      )
+    );
+    bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", inner));
+    address signer = ecrecover(digest, p.authV, p.authR, p.authS);
+    require(signer != address(0) && signer == p.owner, "bad deposit auth");
+
+    _transact(_args, _extData, p.owner);
+  }
+
+  /// @dev Shared deposit/withdraw logic. `payer` funds a deposit (transferFrom).
+  function _transact(Proof memory _args, ExtData memory _extData, address payer) internal nonReentrant whenNotPaused {
     require(
       _extData.encryptedOutput1.length <= MAX_ENCRYPTED_OUTPUT_SIZE &&
       _extData.encryptedOutput2.length <= MAX_ENCRYPTED_OUTPUT_SIZE,
@@ -106,7 +168,7 @@ contract ERCPool is MerkleTreeWithHistory, UUPSUpgradeable, ReentrancyGuard, Pau
     // internal transfers are not allowed. if _extData.extAmount == 0, it will fail at calculatePublicAmount() above.
     if (_extData.extAmount > 0) {
       require(uint256(_extData.extAmount) <= maximumDepositAmount, "amount is larger than maximumDepositAmount");
-      token.safeTransferFrom(msg.sender, address(this), uint256(_extData.extAmount));
+      token.safeTransferFrom(payer, address(this), uint256(_extData.extAmount));
     } else if (_extData.extAmount < 0) {
       require(_extData.recipient != address(0), "Can't withdraw to zero address");
       token.safeTransfer(_extData.recipient, uint256(-_extData.extAmount));
