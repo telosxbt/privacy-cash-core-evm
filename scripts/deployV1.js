@@ -1,22 +1,25 @@
 /**
  * Deploy the HyperTrader v1 stack (sub-account buys) on HyperEVM:
  *
- *   - USDC privacy pool (ERCPool)   : shielded deposit/withdraw of USDC
- *   - HYPE privacy pool (EtherPool) : shielded deposit/withdraw of native HYPE
- *   - TradeAccount implementation   : EIP-1167 template, one clone per trade
- *   - HyperTrader                   : spend shielded USDC -> isolated spot buy
- *                                     -> deliver(tradeId) to a fresh address
- *                                        (EVM ERC-20 or HyperCore account)
+ *   - Privacy pools (mixer): USDC, BTC, ETH (ERCPool) + HYPE (EtherPool, native).
+ *     Each allows shielded deposit/withdraw of its asset.
+ *   - TradeAccount implementation : EIP-1167 template, one clone per trade.
+ *   - HyperTrader                 : spend shielded USDC (the quote pool) -> isolated
+ *                                   spot buy -> deliver(tradeId) / cancel(tradeId)
+ *                                   to a fresh address (EVM ERC-20 or HyperCore acct).
  *
- * The pools need NO trader role (the controller only uses the standard withdrawal
- * path). trade()/deliver() are permissionless; a relayer submits both and is
- * reimbursed via the in-token `fee` field.
+ * The pools need NO trader role; trade()/deliver()/cancel() are permissionless and
+ * relayer-friendly (reimbursed via the in-token `fee`).
  *
  * PRODUCTION NOTE: `configureCore` expects a HyperCore gateway implementing
- * {IHyperCore} where each {TradeAccount}'s calls act on ITS OWN core account
- * (raw CoreWriter actions issued from the TradeAccount). That production gateway
- * is an integration step; this script deploys the EVM-side stack and prints the
- * call to wire it once available.
+ * {IHyperCore} where each {TradeAccount}'s calls act on ITS OWN core account.
+ * That gateway is an integration step; this script deploys the EVM-side stack and
+ * prints the wiring call.
+ *
+ * Configure ERC-20 pools via env (a pool is deployed for each asset whose address
+ * is set). USDC is required (it is the trader's quote pool).
+ *
+ *   USDC=0x.. USDC_DECIMALS=6  BTC=0x.. BTC_DECIMALS=8  ETH=0x.. ETH_DECIMALS=18
  */
 const fs = require('fs')
 const path = require('path')
@@ -26,21 +29,24 @@ const { utils } = ethers
 const MERKLE_TREE_HEIGHT = 26
 
 const ADMIN = process.env.ADMIN // defaults to deployer if unset
-const USDC = (process.env.USDC || '').toLowerCase()
-const USDC_DECIMALS = parseInt(process.env.USDC_DECIMALS || '6', 10)
 const USDC_CORE_TOKEN = parseInt(process.env.USDC_CORE_TOKEN || '0', 10)
 const DEADLINE_SECS = parseInt(process.env.DEADLINE_SECS || '300', 10)
 const CORE_GATEWAY = process.env.CORE_GATEWAY // IHyperCore impl; optional at deploy time
 
-const USDC_MAX = utils.parseUnits(process.env.USDC_MAX || '1000000', USDC_DECIMALS)
-const USDC_MIN = utils.parseUnits(process.env.USDC_MIN || '1', USDC_DECIMALS)
+// ERC-20 privacy pools to deploy (skipped when the token address is unset).
+const ERC_ASSETS = [
+  { key: 'usdc', token: process.env.USDC, decimals: process.env.USDC_DECIMALS || '6', max: process.env.USDC_MAX || '1000000', min: process.env.USDC_MIN || '1' },
+  { key: 'btc', token: process.env.BTC, decimals: process.env.BTC_DECIMALS || '8', max: process.env.BTC_MAX || '100', min: process.env.BTC_MIN || '0.0001' },
+  { key: 'eth', token: process.env.ETH, decimals: process.env.ETH_DECIMALS || '18', max: process.env.ETH_MAX || '1000', min: process.env.ETH_MIN || '0.001' },
+].filter((a) => a.token)
+
 const HYPE_MAX = utils.parseEther(process.env.HYPE_MAX || '10000')
 const HYPE_MIN = utils.parseEther(process.env.HYPE_MIN || '0.001')
 
-async function deployProxy(factory, implArgs, initArgs) {
+async function deployPoolProxy(factory, implArgs, max, min, admin) {
   const impl = await factory.deploy(...implArgs)
   await impl.deployed()
-  const initData = factory.interface.encodeFunctionData('initialize', initArgs)
+  const initData = factory.interface.encodeFunctionData('initialize', [max, min, admin])
   const Proxy = await ethers.getContractFactory('ERC1967Proxy')
   const proxy = await Proxy.deploy(impl.address, initData)
   await proxy.deployed()
@@ -56,7 +62,8 @@ async function main() {
   console.log(`Deployer: ${deployer.address}`)
   console.log(`Admin:    ${admin}`)
   console.log(`Network:  ${net.name} (${net.chainId})`)
-  if (!USDC) throw new Error('Set USDC=<usdc erc-20 address>')
+  const usdcCfg = ERC_ASSETS.find((a) => a.key === 'usdc')
+  if (!usdcCfg) throw new Error('Set USDC=<usdc erc-20 address> (required: it is the quote pool)')
 
   const verifier2 = await (await ethers.getContractFactory('Verifier2')).deploy()
   await verifier2.deployed()
@@ -66,23 +73,40 @@ async function main() {
   console.log(`Hasher:    ${hasher.address}`)
 
   const ERCPool = await ethers.getContractFactory('ERCPool')
-  const { proxy: usdcPool, impl: usdcImpl } = await deployProxy(
-    ERCPool,
-    [verifier2.address, MERKLE_TREE_HEIGHT, hasher.address, USDC],
-    [USDC_MAX, USDC_MIN, admin],
-  )
   const EtherPool = await ethers.getContractFactory('EtherPool')
-  const { proxy: hypePool, impl: hypeImpl } = await deployProxy(
+
+  // ERC-20 pools (USDC, BTC, ETH, ...).
+  const pools = {}
+  for (const a of ERC_ASSETS) {
+    const decimals = parseInt(a.decimals, 10)
+    const max = utils.parseUnits(a.max, decimals)
+    const min = utils.parseUnits(a.min, decimals)
+    const { proxy, impl } = await deployPoolProxy(
+      ERCPool,
+      [verifier2.address, MERKLE_TREE_HEIGHT, hasher.address, a.token.toLowerCase()],
+      max,
+      min,
+      admin,
+    )
+    pools[a.key] = { pool: proxy.address, impl: impl.address, token: a.token.toLowerCase(), decimals }
+    console.log(`${a.key.toUpperCase()} pool: ${proxy.address}`)
+  }
+
+  // Native HYPE pool.
+  const { proxy: hypePool, impl: hypeImpl } = await deployPoolProxy(
     EtherPool,
     [verifier2.address, MERKLE_TREE_HEIGHT, hasher.address],
-    [HYPE_MAX, HYPE_MIN, admin],
+    HYPE_MAX,
+    HYPE_MIN,
+    admin,
   )
-  console.log(`USDC pool: ${usdcPool.address}`)
+  pools.hype = { pool: hypePool.address, impl: hypeImpl.address, native: true }
   console.log(`HYPE pool: ${hypePool.address}`)
 
+  // Trader (quote = USDC pool) + TradeAccount template.
   const tradeImpl = await (await ethers.getContractFactory('TradeAccount')).deploy()
   await tradeImpl.deployed()
-  const trader = await (await ethers.getContractFactory('HyperTrader')).deploy(admin, usdcPool.address, tradeImpl.address)
+  const trader = await (await ethers.getContractFactory('HyperTrader')).deploy(admin, pools.usdc.pool, tradeImpl.address)
   await trader.deployed()
   console.log(`TradeAccount impl: ${tradeImpl.address}`)
   console.log(`Trader:            ${trader.address}`)
@@ -106,10 +130,7 @@ async function main() {
     coreGateway: CORE_GATEWAY || null,
     usdcCoreToken: USDC_CORE_TOKEN,
     merkleTreeHeight: MERKLE_TREE_HEIGHT,
-    pools: {
-      usdc: { pool: usdcPool.address, impl: usdcImpl.address, token: USDC, decimals: USDC_DECIMALS },
-      hype: { pool: hypePool.address, impl: hypeImpl.address, native: true },
-    },
+    pools,
   }
   const dir = path.join(__dirname, '..', 'deployments')
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
