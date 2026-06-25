@@ -23,8 +23,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *
  *   2. deliver(): once the fill is observable, read the trade account's spot
  *      balance (synchronous precompile) to confirm the asset arrived, then push
- *      exactly `size` to the user's chosen address — on HyperEVM (ERC-20) or on
- *      HyperCore (spot account), per the trade's `venue`.
+ *      exactly `size` to the user's `recipient` HyperCore spot account. (Core->EVM
+ *      bridging credits the sender, so the user bridges to HyperEVM themselves if
+ *      they want the ERC-20.)
  *
  *   PER-TRADE ISOLATION: because each trade buys on its own {TradeAccount}, the
  *   delivery balance check is unambiguous — an unfilled trade's account is empty,
@@ -54,11 +55,6 @@ contract HyperTrader is ReentrancyGuard {
   uint64 public usdcCoreToken; // HyperCore spot token id for USDC
   uint64 public defaultDeadlineSecs; // applied when a trade passes deadline = 0
 
-  enum Venue {
-    Evm, // deliver as ERC-20 on HyperEVM
-    Core // deliver to a HyperCore spot account
-  }
-
   enum Status {
     None,
     Open,
@@ -68,10 +64,9 @@ contract HyperTrader is ReentrancyGuard {
 
   struct Trade {
     address account; // the cloned TradeAccount holding this trade's funds
-    address recipient; // where the bought asset (or a refund) is delivered
+    address recipient; // HyperCore spot account that receives the asset (or refund)
     uint64 assetCoreToken; // core token id of the bought asset
     uint64 size; // base size bought (sz units)
-    Venue venue;
     uint64 deadline; // unix seconds; after this, cancel() can refund
     Status status;
   }
@@ -82,8 +77,7 @@ contract HyperTrader is ReentrancyGuard {
     uint64 size; // base size to buy (sz units)
     uint64 limitPx; // slippage cap (core px units)
     uint128 cloid; // client order id
-    address recipient; // destination address for the bought asset / refund
-    Venue venue; // EVM (ERC-20) or CORE (spot account)
+    address recipient; // HyperCore spot account that receives the asset / refund
     uint64 deadline; // unix seconds; 0 => now + defaultDeadlineSecs
   }
 
@@ -101,10 +95,9 @@ contract HyperTrader is ReentrancyGuard {
     uint64 size,
     uint64 limitPx,
     uint128 cloid,
-    uint256 usdcIn,
-    uint8 venue
+    uint256 usdcIn
   );
-  event Delivered(uint256 indexed tradeId, address recipient, uint64 assetCoreToken, uint64 size, uint8 venue);
+  event Delivered(uint256 indexed tradeId, address recipient, uint64 assetCoreToken, uint64 size);
   event Cancelled(uint256 indexed tradeId, address recipient, uint64 usdcRefunded, uint64 assetRefunded);
 
   modifier onlyAdmin() {
@@ -165,7 +158,7 @@ contract HyperTrader is ReentrancyGuard {
    * @param proof ZK proof for the USDC pool withdrawal (recipient must be this).
    * @param extData External data; `recipient` must equal this controller and
    *        `extAmount` must be negative. `fee`/`feeRecipient` pay the relayer.
-   * @param p Trade parameters (asset, size, slippage cap, destination, venue).
+   * @param p Trade parameters (asset, size, slippage cap, destination Core account).
    */
   function trade(
     ERCPool.Proof calldata proof,
@@ -207,12 +200,11 @@ contract HyperTrader is ReentrancyGuard {
       recipient: p.recipient,
       assetCoreToken: p.assetCoreToken,
       size: p.size,
-      venue: p.venue,
       deadline: deadline,
       status: Status.Open
     });
 
-    emit Traded(tradeId, acct, p.recipient, p.asset, p.assetCoreToken, p.size, p.limitPx, p.cloid, usdcIn, uint8(p.venue));
+    emit Traded(tradeId, acct, p.recipient, p.asset, p.assetCoreToken, p.size, p.limitPx, p.cloid, usdcIn);
   }
 
   /**
@@ -229,15 +221,19 @@ contract HyperTrader is ReentrancyGuard {
     require(core.spotBalance(t.account, t.assetCoreToken) >= sizeWei, "not filled");
 
     t.status = Status.Delivered;
-    TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, sizeWei, t.venue == Venue.Evm);
+    // Deliver onto the recipient's HyperCore spot account (toEvm=false). If the
+    // user wants the asset on HyperEVM, they bridge it themselves from Core (as
+    // the sender), since a Core->EVM bridge credits the sender, not an arbitrary
+    // address.
+    TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, sizeWei, false);
 
-    emit Delivered(tradeId, t.recipient, t.assetCoreToken, t.size, uint8(t.venue));
+    emit Delivered(tradeId, t.recipient, t.assetCoreToken, t.size);
   }
 
   /**
    * @notice Refund an expired, undelivered trade: sweep whatever sits on the
    *         trade's account — unspent USDC (order never filled) and/or any asset
-   *         (partial fill) — to the user's `recipient`, using the trade's `venue`.
+   *         (partial fill) — to the user's `recipient` HyperCore spot account.
    *         Permissionless; the relayer calls it once `deadline` has passed.
    */
   function cancel(uint256 tradeId) external nonReentrant {
@@ -249,10 +245,9 @@ contract HyperTrader is ReentrancyGuard {
     uint64 assetBal = core.spotBalance(t.account, t.assetCoreToken);
     require(usdcBal > 0 || assetBal > 0, "nothing to refund");
 
-    bool toEvm = t.venue == Venue.Evm;
     t.status = Status.Cancelled;
-    if (usdcBal > 0) TradeAccount(t.account).sendTo(t.recipient, usdcCoreToken, usdcBal, toEvm);
-    if (assetBal > 0) TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, assetBal, toEvm);
+    if (usdcBal > 0) TradeAccount(t.account).sendTo(t.recipient, usdcCoreToken, usdcBal, false);
+    if (assetBal > 0) TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, assetBal, false);
 
     emit Cancelled(tradeId, t.recipient, usdcBal, assetBal);
   }

@@ -21,9 +21,6 @@ const PX = 5 // USDC core per asset core
 const SIZE = 100 // asset base size to buy
 const USDC_IN = BigNumber.from(SIZE * PX) // 500
 
-const VENUE_EVM = 0
-const VENUE_CORE = 1
-
 const POOL_MIN = 1
 const POOL_MAX = BigNumber.from(10).pow(30)
 const FRESH = '0x000000000000000000000000000000000000bEEF'
@@ -148,8 +145,8 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     return { usdc, asset, usdcPool, trader, mock, admin, alice, keeper, encryptionKey, keypair }
   }
 
-  function tradeParams({ size = SIZE, limitPx = PX, cloid = 1, recipient = FRESH, venue = VENUE_EVM, deadline = 0 }) {
-    return { asset: ASSET_SPOT, assetCoreToken: ASSET_CORE, size, limitPx, cloid, recipient, venue, deadline }
+  function tradeParams({ size = SIZE, limitPx = PX, cloid = 1, recipient = FRESH, deadline = 0 }) {
+    return { asset: ASSET_SPOT, assetCoreToken: ASSET_CORE, size, limitPx, cloid, recipient, deadline }
   }
 
   // Deposit `deposit` USDC (shielded) and return a withdrawal proof to the controller.
@@ -163,29 +160,17 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     return prepareTransaction({ tree, inputs: [dep], outputs, recipient: trader.address, fee, feeRecipient, encryptionKey })
   }
 
-  it('happy path EVM: shielded USDC -> buy -> deliver asset as ERC-20 on HyperEVM', async function () {
-    const { usdc, asset, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+  it('happy path: shielded USDC -> buy -> deliver asset to recipient HyperCore account', async function () {
+    const { usdc, usdcPool, trader, mock, keeper, encryptionKey, keypair } = await loadFixture(fixture)
     const tree = createEmptyTree()
     const { args, extData } = await spend({ usdcPool, usdc, tree, keypair, encryptionKey, trader, deposit: USDC_IN, withdraw: USDC_IN })
 
-    await expect(trader.connect(keeper).trade(args, extData, tradeParams({ venue: VENUE_EVM }))).to.emit(trader, 'Traded')
+    await expect(trader.connect(keeper).trade(args, extData, tradeParams({}))).to.emit(trader, 'Traded')
     expect(await usdc.balanceOf(usdcPool.address)).to.equal(0)
 
     await expect(trader.connect(keeper).deliver(0)).to.emit(trader, 'Delivered')
-    expect(await asset.balanceOf(FRESH)).to.equal(SIZE)
-  })
-
-  it('happy path CORE: deliver the asset to a HyperCore spot account', async function () {
-    const { usdc, asset, usdcPool, trader, mock, keeper, encryptionKey, keypair } = await loadFixture(fixture)
-    const tree = createEmptyTree()
-    const { args, extData } = await spend({ usdcPool, usdc, tree, keypair, encryptionKey, trader, deposit: USDC_IN, withdraw: USDC_IN })
-
-    await trader.connect(keeper).trade(args, extData, tradeParams({ venue: VENUE_CORE, cloid: 2 }))
-    await trader.connect(keeper).deliver(0)
-
-    // stays on HyperCore: credited to the recipient's core account, not bridged to EVM
+    // delivered onto the recipient's HyperCore spot account (Core delivery)
     expect(await mock.coreBalance(FRESH, ASSET_CORE)).to.equal(SIZE)
-    expect(await asset.balanceOf(FRESH)).to.equal(0)
   })
 
   it('per-trade isolation: an unfilled trade cannot deliver against another trade fill', async function () {
@@ -207,10 +192,10 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     // A's asset sits on A's own account; B's account is empty -> B cannot deliver.
     await expect(trader.connect(keeper).deliver(1)).to.be.revertedWith('not filled')
 
-    // A delivers fine against its own fill.
+    // A delivers fine against its own fill (onto A's recipient Core account).
     await trader.connect(keeper).deliver(0)
-    expect(await asset.balanceOf(rA)).to.equal(SIZE)
-    expect(await asset.balanceOf(rB)).to.equal(0)
+    expect(await mock.coreBalance(rA, ASSET_CORE)).to.equal(SIZE)
+    expect(await mock.coreBalance(rB, ASSET_CORE)).to.equal(0)
   })
 
   it('deliver reverts before the order has filled', async function () {
@@ -222,7 +207,7 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
   })
 
   it('relayer model: relayer paid a USDC fee out of the note; user sends no tx', async function () {
-    const { usdc, asset, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const { usdc, usdcPool, trader, mock, keeper, encryptionKey, keypair } = await loadFixture(fixture)
     const tree = createEmptyTree()
     const [, , , relayer] = await ethers.getSigners()
     const FEE = BigNumber.from(50)
@@ -235,11 +220,11 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     await trader.connect(relayer).deliver(0)
 
     expect(await usdc.balanceOf(relayer.address)).to.equal(FEE)
-    expect(await asset.balanceOf(FRESH)).to.equal(SIZE)
+    expect(await mock.coreBalance(FRESH, ASSET_CORE)).to.equal(SIZE)
   })
 
   it('cancel: an expired, unfilled trade refunds the USDC to the recipient', async function () {
-    const { usdc, usdcPool, trader, keeper, encryptionKey, keypair } = await loadFixture(fixture)
+    const { usdc, usdcPool, trader, mock, keeper, encryptionKey, keypair } = await loadFixture(fixture)
     const tree = createEmptyTree()
     const { args, extData } = await spend({ usdcPool, usdc, tree, keypair, encryptionKey, trader, deposit: USDC_IN, withdraw: USDC_IN })
 
@@ -247,8 +232,8 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     await trader.connect(keeper).trade(args, extData, tradeParams({ limitPx: PX - 1, cloid: 5, deadline: 1 }))
     await expect(trader.connect(keeper).cancel(0)).to.emit(trader, 'Cancelled')
 
-    // the USDC the user wanted to spend is refunded to their chosen recipient
-    expect(await usdc.balanceOf(FRESH)).to.equal(USDC_IN)
+    // the USDC the user wanted to spend is refunded to their recipient Core account
+    expect(await mock.coreBalance(FRESH, USDC_CORE)).to.equal(USDC_IN)
     const t = await trader.trades(0)
     expect(t.status).to.equal(3) // Cancelled
   })
