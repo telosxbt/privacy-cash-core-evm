@@ -45,7 +45,8 @@ contract HyperTrader is ReentrancyGuard {
   address public admin;
   address public pendingAdmin;
 
-  IHyperCore public core;
+  IHyperCore public core; // read gateway (HyperCoreView in prod, MockHyperCore in tests)
+  address public coreWriter; // production CoreWriter (0x333..3); 0 => typed `core` writes (tests)
   ERCPool public immutable usdcPool; // quote pool: the user spends shielded USDC
   IERC20 public immutable usdc;
   address public immutable tradeAccountImpl; // EIP-1167 implementation for clones
@@ -89,7 +90,7 @@ contract HyperTrader is ReentrancyGuard {
   mapping(uint256 => Trade) public trades;
   uint256 public nextTradeId;
 
-  event CoreConfigured(address indexed core, uint64 usdcCoreToken);
+  event CoreConfigured(address indexed core, address coreWriter, uint64 usdcCoreToken);
   event AdminChanged(address indexed oldAdmin, address indexed newAdmin);
   event Traded(
     uint256 indexed tradeId,
@@ -123,12 +124,25 @@ contract HyperTrader is ReentrancyGuard {
 
   // ----------------------------------------------------------------- config
 
-  function configureCore(IHyperCore _core, uint64 _usdcCoreToken, uint64 _defaultDeadlineSecs) external onlyAdmin {
+  /**
+   * @param _core Read gateway: {HyperCoreView} (precompile-backed) in production,
+   *        MockHyperCore in tests.
+   * @param _coreWriter Production CoreWriter system contract (0x333..3). Pass the
+   *        zero address in tests so each {TradeAccount} routes writes through the
+   *        typed `_core` simulator instead of raw CoreWriter.
+   */
+  function configureCore(
+    IHyperCore _core,
+    address _coreWriter,
+    uint64 _usdcCoreToken,
+    uint64 _defaultDeadlineSecs
+  ) external onlyAdmin {
     require(address(_core) != address(0), "zero address");
     core = _core;
+    coreWriter = _coreWriter;
     usdcCoreToken = _usdcCoreToken;
     defaultDeadlineSecs = _defaultDeadlineSecs;
-    emit CoreConfigured(address(_core), _usdcCoreToken);
+    emit CoreConfigured(address(_core), _coreWriter, _usdcCoreToken);
   }
 
   function transferAdmin(address _newAdmin) external onlyAdmin {
@@ -176,7 +190,7 @@ contract HyperTrader is ReentrancyGuard {
 
     // One isolated HyperCore account per trade (deterministic clone).
     address acct = tradeAccountImpl.cloneDeterministic(bytes32(tradeId));
-    TradeAccount(acct).initialize(address(this), core);
+    TradeAccount(acct).initialize(address(this), core, coreWriter);
 
     // Fund it and place the buy *on its own account*.
     usdc.safeTransfer(acct, usdcIn);
@@ -210,10 +224,12 @@ contract HyperTrader is ReentrancyGuard {
   function deliver(uint256 tradeId) external nonReentrant {
     Trade storage t = trades[tradeId];
     require(t.status == Status.Open, "not open");
-    require(core.spotBalance(t.account, t.assetCoreToken) >= t.size, "not filled");
+    // `size` is an order (sz) unit; spot balances are wei units, so convert first.
+    uint64 sizeWei = core.szToWei(t.assetCoreToken, t.size);
+    require(core.spotBalance(t.account, t.assetCoreToken) >= sizeWei, "not filled");
 
     t.status = Status.Delivered;
-    TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, t.size, t.venue == Venue.Evm);
+    TradeAccount(t.account).sendTo(t.recipient, t.assetCoreToken, sizeWei, t.venue == Venue.Evm);
 
     emit Delivered(tradeId, t.recipient, t.assetCoreToken, t.size, uint8(t.venue));
   }

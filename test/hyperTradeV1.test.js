@@ -135,7 +135,8 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
     const tradeImpl = await deploy('TradeAccount')
     const trader = await deploy('HyperTrader', admin.address, usdcPool.address, tradeImpl.address)
 
-    await trader.connect(admin).configureCore(mock.address, USDC_CORE, 3600)
+    // coreWriter = zero => TradeAccounts route writes through the typed mock gateway
+    await trader.connect(admin).configureCore(mock.address, ethers.constants.AddressZero, USDC_CORE, 3600)
     await mock.register(USDC_CORE, usdc.address)
     await mock.register(ASSET_CORE, asset.address)
     await mock.setMarket(ASSET_SPOT, ASSET_CORE, USDC_CORE, PX)
@@ -263,6 +264,8 @@ describe('HyperTrader v1 (sub-account buys, EVM/Core delivery)', function () {
 
   it('access control: only admin configures core', async function () {
     const { trader, alice, mock } = await loadFixture(fixture)
-    await expect(trader.connect(alice).configureCore(mock.address, USDC_CORE, 3600)).to.be.revertedWith('only admin')
+    await expect(
+      trader.connect(alice).configureCore(mock.address, ethers.constants.AddressZero, USDC_CORE, 3600),
+    ).to.be.revertedWith('only admin')
   })
 })

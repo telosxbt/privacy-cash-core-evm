@@ -31,7 +31,9 @@ const MERKLE_TREE_HEIGHT = 26
 const ADMIN = process.env.ADMIN // defaults to deployer if unset
 const USDC_CORE_TOKEN = parseInt(process.env.USDC_CORE_TOKEN || '0', 10)
 const DEADLINE_SECS = parseInt(process.env.DEADLINE_SECS || '300', 10)
-const CORE_GATEWAY = process.env.CORE_GATEWAY // IHyperCore impl; optional at deploy time
+// Production CoreWriter system contract; set '' (empty) to leave writes unwired.
+const CORE_WRITER = process.env.CORE_WRITER || '0x3333333333333333333333333333333333333333'
+const WIRE_CORE = process.env.WIRE_CORE === '1' // deploy HyperCoreView + configureCore
 
 // ERC-20 privacy pools to deploy (skipped when the token address is unset).
 const ERC_ASSETS = [
@@ -111,12 +113,23 @@ async function main() {
   console.log(`TradeAccount impl: ${tradeImpl.address}`)
   console.log(`Trader:            ${trader.address}`)
 
-  if (CORE_GATEWAY && admin.toLowerCase() === deployer.address.toLowerCase()) {
-    await (await trader.configureCore(CORE_GATEWAY, USDC_CORE_TOKEN, DEADLINE_SECS)).wait()
-    console.log(`Wired core gateway ${CORE_GATEWAY}.`)
+  // Production read gateway (precompile-backed). Writes are issued raw from each
+  // TradeAccount via CORE_WRITER.
+  let coreView = null
+  if (WIRE_CORE) {
+    const view = await (await ethers.getContractFactory('HyperCoreView')).deploy()
+    await view.deployed()
+    coreView = view.address
+    console.log(`HyperCoreView: ${coreView}`)
+    console.log('  -> register each asset on the view: view.registerToken(coreToken, coreDecimals, szDecimals)')
+    if (admin.toLowerCase() === deployer.address.toLowerCase()) {
+      await (await trader.configureCore(coreView, CORE_WRITER, USDC_CORE_TOKEN, DEADLINE_SECS)).wait()
+      console.log(`Wired core (view=${coreView}, coreWriter=${CORE_WRITER}).`)
+    }
   } else {
-    console.log('\n⚠️  configureCore not set. Once the HyperCore gateway is deployed, the admin must call:')
-    console.log(`  trader.configureCore(<IHyperCore gateway>, ${USDC_CORE_TOKEN}, ${DEADLINE_SECS})`)
+    console.log('\n⚠️  Core not wired (set WIRE_CORE=1 to deploy HyperCoreView + configureCore).')
+    console.log('   The admin must eventually call:')
+    console.log(`  trader.configureCore(<HyperCoreView>, ${CORE_WRITER}, ${USDC_CORE_TOKEN}, ${DEADLINE_SECS})`)
   }
 
   const out = {
@@ -127,7 +140,8 @@ async function main() {
     hasher: hasher.address,
     tradeAccountImpl: tradeImpl.address,
     trader: trader.address,
-    coreGateway: CORE_GATEWAY || null,
+    coreView,
+    coreWriter: CORE_WRITER,
     usdcCoreToken: USDC_CORE_TOKEN,
     merkleTreeHeight: MERKLE_TREE_HEIGHT,
     pools,
